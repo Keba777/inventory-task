@@ -99,3 +99,45 @@ func TestGetStock_ConcurrentWithWrites(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, 500, service.GetStock(pID))
 }
+
+func TestReserveMultiple_Concurrent(t *testing.T) {
+	// Setup: Two products, each 100 stock
+	service := NewSafeInventoryService(map[string]*Product{
+		"A": {ID: "A", Name: "Product A", Stock: 100},
+		"B": {ID: "B", Name: "Product B", Stock: 100},
+	})
+
+	const numGoroutines = 150
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	results := make(chan error, numGoroutines)
+
+	// Test: 150 goroutines each try to reserve 1 of A and 1 of B
+	// Only 100 should succeed, 50 should fail.
+	// Final stock of BOTH should be 0. If it's not atomic, they might differ.
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			items := []ReserveItem{
+				{ProductID: "A", Quantity: 1},
+				{ProductID: "B", Quantity: 1},
+			}
+			results <- service.ReserveMultiple(items)
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	for err := range results {
+		if err == nil {
+			successCount++
+		}
+	}
+
+	assert.Equal(t, 100, successCount)
+	assert.Equal(t, 0, service.GetStock("A"))
+	assert.Equal(t, 0, service.GetStock("B"))
+}
